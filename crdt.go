@@ -77,11 +77,21 @@ type SessionDAGService interface {
 type Options struct {
 	Logger              logging.StandardLogger
 	RebroadcastInterval time.Duration
+	// The BeforePutHook function is triggered whenever an element
+	// is about to be added to the datastore (either by a local
+	// or remote update). If the function returns an error, the
+	// element will not be added to the datastore.
+	BeforePutHook func(k ds.Key, v []byte) error
 	// The PutHook function is triggered whenever an element
 	// is successfully added to the datastore (either by a local
 	// or remote update), and only when that addition is considered the
 	// prevalent value.
 	PutHook func(k ds.Key, v []byte)
+	// The BeforeDeleteHook function is triggered whenever an element
+	// is about to be removed from the datastore (either by a local
+	// or remote update). If the function returns an error, the
+	// element will not be removed from the datastore.
+	BeforeDeleteHook func(k string) error
 	// The DeleteHook function is triggered whenever a version of an
 	// element is successfully removed from the datastore (either by a
 	// local or remote update). Unordered and concurrent updates may
@@ -146,7 +156,9 @@ func DefaultOptions() *Options {
 	return &Options{
 		Logger:              logging.Logger("crdt"),
 		RebroadcastInterval: time.Minute,
+		BeforePutHook:       nil,
 		PutHook:             nil,
+		BeforeDeleteHook:    nil,
 		DeleteHook:          nil,
 		NumWorkers:          5,
 		DAGSyncerTimeout:    5 * time.Minute,
@@ -240,12 +252,27 @@ func New(
 	// <namespace>/heads
 	fullHeadsNs := namespace.ChildString(headsNs)
 
+	setBeforePutHook := func(k string, v []byte) error {
+		if opts.BeforePutHook == nil {
+			return nil
+		}
+		dsk := ds.NewKey(k)
+		return opts.BeforePutHook(dsk, v)
+	}
+
 	setPutHook := func(k string, v []byte) {
 		if opts.PutHook == nil {
 			return
 		}
 		dsk := ds.NewKey(k)
 		opts.PutHook(dsk, v)
+	}
+
+	setBeforeDeleteHook := func(k string) error {
+		if opts.BeforeDeleteHook == nil {
+			return nil
+		}
+		return opts.BeforeDeleteHook(k)
 	}
 
 	setDeleteHook := func(k string) {
@@ -257,7 +284,7 @@ func New(
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	set, err := newCRDTSet(ctx, store, fullSetNs, opts.Logger, setPutHook, setDeleteHook)
+	set, err := newCRDTSet(ctx, store, fullSetNs, opts.Logger, setBeforePutHook, setPutHook, setBeforeDeleteHook, setDeleteHook)
 	if err != nil {
 		cancel()
 		return nil, errors.Wrap(err, "error setting up crdt set")
@@ -903,7 +930,10 @@ func (store *Datastore) repairDAG() error {
 	var nodes []nodeHead
 	queued := cid.NewSet()
 	for _, h := range heads {
-		nodes = append(nodes, nodeHead{head: h, node: h})
+		nodes = append(nodes, nodeHead{
+			head: h,
+			node: h,
+		})
 		queued.Add(h)
 	}
 
@@ -975,7 +1005,10 @@ func (store *Datastore) repairDAG() error {
 		links := n.Links()
 		for _, l := range links {
 			if queued.Visit(l.Cid) {
-				nodes = append(nodes, (nodeHead{head: head, node: l.Cid}))
+				nodes = append(nodes, (nodeHead{
+					head: head,
+					node: l.Cid,
+				}))
 			}
 		}
 
@@ -1117,7 +1150,10 @@ func (store *Datastore) Close() error {
 // Put and Delete in the same CRDT-delta and only applying it and
 // broadcasting it on Commit().
 func (store *Datastore) Batch(ctx context.Context) (ds.Batch, error) {
-	return &batch{ctx: ctx, store: store}, nil
+	return &batch{
+		ctx:   ctx,
+		store: store,
+	}, nil
 }
 
 func deltaMerge(d1, d2 *pb.Delta) *pb.Delta {

@@ -34,11 +34,13 @@ var (
 // Value. When two values have the same priority, it chooses by alphabetically
 // sorting their unique IDs alphabetically.
 type set struct {
-	store      ds.Datastore
-	namespace  ds.Key
-	putHook    func(key string, v []byte)
-	deleteHook func(key string)
-	logger     logging.StandardLogger
+	store            ds.Datastore
+	namespace        ds.Key
+	beforePutHook    func(key string, v []byte) error
+	putHook          func(key string, v []byte)
+	beforeDeleteHook func(key string) error
+	deleteHook       func(key string)
+	logger           logging.StandardLogger
 
 	// Avoid merging two things at the same time since
 	// we read-write value-priorities in a non-atomic way.
@@ -63,7 +65,9 @@ func newCRDTSet(
 	d ds.Datastore,
 	namespace ds.Key,
 	logger logging.StandardLogger,
+	beforePutHook func(key string, v []byte) error,
 	putHook func(key string, v []byte),
+	beforeDeleteHook func(key string) error,
 	deleteHook func(key string),
 ) (*set, error) {
 
@@ -76,12 +80,14 @@ func newCRDTSet(
 	}
 
 	set := &set{
-		namespace:       namespace,
-		store:           d,
-		logger:          logger,
-		putHook:         putHook,
-		deleteHook:      deleteHook,
-		tombstonesBloom: blm,
+		namespace:        namespace,
+		store:            d,
+		logger:           logger,
+		beforePutHook:    beforePutHook,
+		putHook:          putHook,
+		beforeDeleteHook: beforeDeleteHook,
+		deleteHook:       deleteHook,
+		tombstonesBloom:  blm,
 	}
 
 	return set, set.primeBloomFilter(ctx)
@@ -501,6 +507,11 @@ func (s *set) setValue(ctx context.Context, writeStore ds.Write, key, id string,
 		}
 	}
 
+	// trigger before put hook
+	if err = s.beforePutHook(key, value); err != nil {
+		return err
+	}
+
 	// store value
 	err = writeStore.Put(ctx, valueK, value)
 	if err != nil {
@@ -590,8 +601,14 @@ func (s *set) putTombs(ctx context.Context, tombs []*pb.Element) error {
 
 	deletedElems := make(map[string]struct{})
 	for _, e := range tombs {
-		// /namespace/tombs/<key>/<id>
 		elemKey := e.GetKey()
+
+		// trigger before put hook
+		if err = s.beforeDeleteHook(elemKey); err != nil {
+			return err
+		}
+
+		// /namespace/tombs/<key>/<id>
 		k := s.tombsPrefix(elemKey).ChildString(e.GetId())
 		err := store.Put(ctx, k, nil)
 		if err != nil {
