@@ -323,39 +323,49 @@ func New(
 		dstore.IsDirty(),
 	)
 
+	return dstore, nil
+}
+
+// Start the datastore processes
+func (store *Datastore) Start() error {
 	// sendJobWorker + NumWorkers
-	dstore.wg.Add(1 + dstore.opts.NumWorkers)
+	store.wg.Add(1 + store.opts.NumWorkers)
 	go func() {
-		defer dstore.wg.Done()
-		dstore.sendJobWorker()
+		defer store.wg.Done()
+		store.sendJobWorker()
 	}()
-	for i := 0; i < dstore.opts.NumWorkers; i++ {
+	for i := 0; i < store.opts.NumWorkers; i++ {
 		go func() {
-			defer dstore.wg.Done()
-			dstore.dagWorker()
+			defer store.wg.Done()
+			store.dagWorker()
 		}()
 	}
-	dstore.wg.Add(4)
+	store.wg.Add(4)
 	go func() {
-		defer dstore.wg.Done()
-		dstore.handleNext()
+		defer store.wg.Done()
+		store.handleNext()
 	}()
 	go func() {
-		defer dstore.wg.Done()
-		dstore.rebroadcast()
-	}()
-
-	go func() {
-		defer dstore.wg.Done()
-		dstore.repair()
+		defer store.wg.Done()
+		store.rebroadcast()
 	}()
 
 	go func() {
-		defer dstore.wg.Done()
-		dstore.logStats()
+		defer store.wg.Done()
+		store.repair()
 	}()
 
-	return dstore, nil
+	go func() {
+		defer store.wg.Done()
+		store.logStats()
+	}()
+
+	return nil
+}
+
+// GetMaxHeight returns the maximum dag height
+func (store *Datastore) GetMaxHeight() uint64 {
+	return store.heads.GetMaxHeight()
 }
 
 func (store *Datastore) handleNext() {

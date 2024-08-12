@@ -24,6 +24,7 @@ type heads struct {
 	cacheMux  sync.RWMutex
 	namespace ds.Key
 	logger    logging.StandardLogger
+	maxHeight uint64
 }
 
 func newHeads(store ds.Datastore, namespace ds.Key, logger logging.StandardLogger) (*heads, error) {
@@ -37,6 +38,18 @@ func newHeads(store ds.Datastore, namespace ds.Key, logger logging.StandardLogge
 		return nil, err
 	}
 	return hh, nil
+}
+
+func (hh *heads) GetMaxHeight() uint64 {
+	hh.cacheMux.RLock()
+	defer hh.cacheMux.RUnlock()
+	return hh.maxHeight
+}
+
+func (hh *heads) updateMaxHeight(height uint64) {
+	if height > hh.maxHeight {
+		hh.maxHeight = height
+	}
 }
 
 func (hh *heads) key(c cid.Cid) ds.Key {
@@ -110,6 +123,7 @@ func (hh *heads) Replace(ctx context.Context, h, c cid.Cid, height uint64) error
 
 	if !batching {
 		hh.cache[c] = height
+		hh.updateMaxHeight(height)
 	}
 
 	err = hh.delete(ctx, store, h)
@@ -127,6 +141,7 @@ func (hh *heads) Replace(ctx context.Context, h, c cid.Cid, height uint64) error
 		}
 		delete(hh.cache, h)
 		hh.cache[c] = height
+		hh.updateMaxHeight(height)
 	}
 	return nil
 }
@@ -140,6 +155,7 @@ func (hh *heads) Add(ctx context.Context, c cid.Cid, height uint64) error {
 	hh.cacheMux.Lock()
 	{
 		hh.cache[c] = height
+		hh.updateMaxHeight(height)
 	}
 	hh.cacheMux.Unlock()
 	return nil
@@ -155,9 +171,7 @@ func (hh *heads) List() ([]cid.Cid, uint64, error) {
 		heads = make([]cid.Cid, 0, len(hh.cache))
 		for head, height := range hh.cache {
 			heads = append(heads, head)
-			if height > maxHeight {
-				maxHeight = height
-			}
+			hh.updateMaxHeight(height)
 		}
 	}
 	hh.cacheMux.RUnlock()
@@ -200,6 +214,7 @@ func (hh *heads) primeCache(ctx context.Context) (ret error) {
 		}
 
 		hh.cache[headCid] = height
+		hh.updateMaxHeight(height)
 	}
 
 	return nil

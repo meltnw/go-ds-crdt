@@ -2,6 +2,7 @@ package crdt
 
 import (
 	"context"
+	logging "github.com/ipfs/go-log/v2"
 	"strings"
 
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
@@ -9,10 +10,11 @@ import (
 
 // PubSubBroadcaster implements a Broadcaster using libp2p PubSub.
 type PubSubBroadcaster struct {
-	ctx   context.Context
-	psub  *pubsub.PubSub
-	topic *pubsub.Topic
-	subs  *pubsub.Subscription
+	ctx    context.Context
+	psub   *pubsub.PubSub
+	topic  *pubsub.Topic
+	subs   *pubsub.Subscription
+	Logger logging.StandardLogger
 }
 
 // NewPubSubBroadcaster returns a new broadcaster using the given PubSub and
@@ -40,10 +42,11 @@ func NewPubSubBroadcaster(ctx context.Context, psub *pubsub.PubSub, topic string
 	}(ctx, subs)
 
 	return &PubSubBroadcaster{
-		ctx:   ctx,
-		psub:  psub,
-		topic: psubTopic,
-		subs:  subs,
+		ctx:    ctx,
+		psub:   psub,
+		topic:  psubTopic,
+		subs:   subs,
+		Logger: logging.Logger("pubSubBroadcaster"),
 	}, nil
 }
 
@@ -71,6 +74,8 @@ func (pbc *PubSubBroadcaster) Next() ([]byte, error) {
 		}
 		return nil, err
 	}
+
+	pbc.Logger.Debugf("Received broadcast: [from=%s]", msg.ReceivedFrom)
 
 	return msg.GetData(), nil
 }
